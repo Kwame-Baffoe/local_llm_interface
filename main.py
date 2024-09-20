@@ -1,58 +1,62 @@
 import gradio as gr
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
+import requests
+import os
 
-# Detect device (use MPS for Apple Silicon if available)
-device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+# Your Hugging Face API token
+HF_API_TOKEN = "YOUR_HUGGING_FACE_API_TOKEN"  # Replace with your actual token
 
-# Load Models
-def load_models():
-    print("Loading Llama 2...")
-    # Llama 2
-    tokenizer_llama = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
-    model_llama = AutoModelForCausalLM.from_pretrained(
-        "meta-llama/Llama-2-7b-chat-hf",
-        torch_dtype=torch.float16  # Use float16 for efficiency
-    )
-    model_llama.to(device)
+# Headers for authentication
+headers = {
+    "Authorization": f"Bearer {HF_API_TOKEN}"
+}
 
-    print("Loading GPT-J...")
-    # GPT-J
-    tokenizer_gptj = AutoTokenizer.from_pretrained("EleutherAI/gpt-j-6B")
-    model_gptj = AutoModelForCausalLM.from_pretrained(
-        "EleutherAI/gpt-j-6B",
-        torch_dtype=torch.float16  # Use float16 for efficiency
-    )
-    model_gptj.to(device)
+# Model endpoints
+MODEL_ENDPOINTS = {
+    "Llama 2": "https://api-inference.huggingface.co/models/meta-llama/Llama-2-7b-chat-hf",
+    "GPT-J": "https://api-inference.huggingface.co/models/EleutherAI/gpt-j-6B"
+    # Add more models here if needed
+}
 
-    return {
-        "Llama 2": (tokenizer_llama, model_llama),
-        "GPT-J": (tokenizer_gptj, model_gptj)
+def query_model(model_name, prompt):
+    api_url = MODEL_ENDPOINTS.get(model_name)
+    if not api_url:
+        return f"Model '{model_name}' is not supported."
+
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 512,
+            "do_sample": True,
+            "top_p": 0.95,
+            "top_k": 50,
+            "temperature": 0.7,
+            "num_return_sequences": 1
+        }
     }
 
-models = load_models()
+    response = requests.post(api_url, headers=headers, json=payload)
 
-# Generate Response Function
-def generate_response(prompt, model_name):
-    try:
-        tokenizer, model = models[model_name]
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        outputs = model.generate(
-            **inputs,
-            max_length=512,
-            do_sample=True,
-            top_p=0.95,
-            top_k=50,
-            temperature=0.7,
-            num_return_sequences=1
-        )
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return response
-    except Exception as e:
-        return f"An error occurred: {str(e)}"
+    if response.status_code == 200:
+        output = response.json()
+        # The response format may vary depending on the model
+        if isinstance(output, list) and "generated_text" in output[0]:
+            return output[0]["generated_text"]
+        elif isinstance(output, dict) and "generated_text" in output:
+            return output["generated_text"]
+        else:
+            return str(output)
+    else:
+        return f"Error {response.status_code}: {response.text}"
 
 # Gradio Interface
-model_options = ["Llama 2", "GPT-J"]
+model_options = list(MODEL_ENDPOINTS.keys())
+
+def generate_response(prompt, model_name):
+    if not HF_API_TOKEN or HF_API_TOKEN == "YOUR_HUGGING_FACE_API_TOKEN":
+        return "Please set your Hugging Face API token in the script."
+    if not prompt:
+        return "Please enter a prompt."
+    return query_model(model_name, prompt)
 
 iface = gr.Interface(
     fn=generate_response,
@@ -61,8 +65,8 @@ iface = gr.Interface(
         gr.Dropdown(choices=model_options, label="Choose Model"),
     ],
     outputs="text",
-    title="Local LLM Interface",
-    description="Interact with Llama 2 and GPT-J locally on your MacOS machine.",
+    title="LLM Interface via Hugging Face Inference API",
+    description="Interact with Llama 2 and GPT-J models via Hugging Face's Inference API.",
 )
 
 if __name__ == "__main__":
